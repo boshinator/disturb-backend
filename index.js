@@ -35,6 +35,9 @@ let activeSession = {
 
 let mobilePushToken = null;
 
+// TIMEZONE OVERRIDE CONFIGURATION
+const timeZoneConfig = { timeZone: 'America/Los_Angeles', hour: '2-digit', minute: '2-digit' };
+
 app.get('/api/config', (req, res) => {
     const mode = process.env.DISTURB_LICENSE_MODE || 'SOLO';
     console.log(`[DISTURB] Mobile app requested config. Serving mode: ${mode}`);
@@ -51,31 +54,35 @@ app.post('/api/register-device', (req, res) => {
 cron.schedule('0 8 * * *', async () => {
     console.log('[DISTURB] ⏰ Executing 8:00 AM Autonomous Scan...');
     try {
-        const spotData = await findSleepSpot(30, 'strict', 17); // Target 30 mins by default
+        // DYNAMIC CLOUD PARAMETER
+        const cronMinutes = parseInt(process.env.CRON_TARGET_MINUTES) || 30;
+        const cronDeadline = parseInt(process.env.CRON_DEADLINE_HOUR) || 17;
+
+        const spotData = await findSleepSpot(cronMinutes, 'strict', cronDeadline); 
         
         if (spotData && mobilePushToken) {
             let notificationTitle = '⚡ DISTURB: TARGET ACQUIRED';
             let notificationBody = '';
 
             if (spotData.status === 'IDEAL') {
-                const startStr = spotData.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const endStr = spotData.end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const startStr = spotData.start.toLocaleTimeString('en-US', timeZoneConfig);
+                const endStr = spotData.end.toLocaleTimeString('en-US', timeZoneConfig);
                 notificationBody = `Optimal ${spotData.minutes}m recovery block secured: ${startStr} - ${endStr}. Tap to arm system.`;
             } 
             else if (spotData.status === 'NEGOTIATED') {
-                const startStr = spotData.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const endStr = spotData.end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const startStr = spotData.start.toLocaleTimeString('en-US', timeZoneConfig);
+                const endStr = spotData.end.toLocaleTimeString('en-US', timeZoneConfig);
                 notificationBody = `${spotData.originalTarget}m target unavailable. Secured ${spotData.minutes}m compromise: ${startStr} - ${endStr}. Accept deal?`;
             }
             else if (spotData.status === 'SPLIT') {
-                const s1 = spotData.spots[0].start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const s2 = spotData.spots[1].start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const s1 = spotData.spots[0].start.toLocaleTimeString('en-US', timeZoneConfig);
+                const s2 = spotData.spots[1].start.toLocaleTimeString('en-US', timeZoneConfig);
                 notificationBody = `Continuous block impossible. Secured two ${spotData.spots[0].minutes}m micro-recoveries at ${s1} & ${s2}. Arm matrix?`;
             }
             else if (spotData.status === 'BREACH') {
                 notificationTitle = '⚠️ DISTURB: BURNOUT BREACH';
                 notificationBody = `Optimal recovery window unavailable due to severe schedule density. Burnout Breach logged. Conserve your energy today—your calendar is at maximum capacity.`;
-                breachCount++; // Log the failure to the enterprise ledger
+                breachCount++; 
                 console.log(`[DISTURB] 🔴 BURNOUT BREACH LOGGED. Total Breaches: ${breachCount}`);
             }
 
@@ -148,7 +155,8 @@ app.post('/api/arm-recovery', async (req, res) => {
                 console.log('[DISTURB] Executing Scheduled Lockdown...');
                 try {
                     await axios.post('https://slack.com/api/dnd.setSnooze', new URLSearchParams({ token: process.env.SLACK_USER_TOKEN, num_minutes: minutes }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-                    const returnTime = new Date(endTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                    // LOCALIZED PACIFIC TIME INJECTION
+                    const returnTime = new Date(endTime).toLocaleTimeString('en-US', timeZoneConfig);
                     await axios.post('https://slack.com/api/users.profile.set', { profile: { status_text: `⚡ System Locked / Back at ${returnTime}`, status_emoji: ":disturb-blue:", status_expiration: 0 } }, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${process.env.SLACK_USER_TOKEN}` } });
                     exec('shortcuts run "DisturbOn"', () => console.log('[DISTURB] Mac OS DND Engaged.'));
                     telemetryLog.push({ id: Date.now().toString(), user: "Babatunde", action: "LOCKED", durationRequested: minutes, timestamp: new Date().toISOString() });
