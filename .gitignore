@@ -1,0 +1,10 @@
+# Master Cloak
+node_modules/
+.env
+credentials.json
+token.json
+tokens.json
+public/token.json
+public/credentials.json
+*.log
+.DS_Store
