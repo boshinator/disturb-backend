@@ -8,17 +8,32 @@ import { exec } from 'child_process';
 import path from 'path'; 
 import { fileURLToPath } from 'url'; 
 import cron from 'node-cron'; 
+import admin from 'firebase-admin';
+import fs from 'fs';
 import { findSleepSpot, blockCalendarSpot, removeCalendarSpot } from './calendar.js';
 
 const __filename = fileURLToPath(import.meta.url); 
 const __dirname = path.dirname(__filename); 
+
+// ⚡ REALTIME DATABASE INITIATION ⚡
+let db;
+try {
+    const serviceAccount = JSON.parse(fs.readFileSync(path.join(__dirname, 'firebase-credentials.json'), 'utf8'));
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+        databaseURL: process.env.FIREBASE_DB_URL
+    });
+    db = admin.database();
+    console.log('[DISTURB] Realtime Database Matrix: ONLINE');
+} catch (error) {
+    console.error('[DISTURB] FATAL DB ERROR: Missing Credentials or URL.', error.message);
+}
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public'))); 
 
 const telemetryLog = [];
-// ⚡ PHASE 3: The Breach Ledger ⚡
 let breachCount = 0; 
 
 let activeSession = {
@@ -26,16 +41,12 @@ let activeSession = {
     lockTimer: null,
     wakeTimer: null,
     eventId: null,
-    // Used for tracking Split-Shifts
     secondaryWarningTimer: null,
     secondaryLockTimer: null,
     secondaryWakeTimer: null,
     secondaryEventId: null
 };
 
-let mobilePushToken = null;
-
-// TIMEZONE OVERRIDE CONFIGURATION
 const timeZoneConfig = { timeZone: 'America/Los_Angeles', hour: '2-digit', minute: '2-digit' };
 
 app.get('/api/config', (req, res) => {
@@ -44,65 +55,108 @@ app.get('/api/config', (req, res) => {
     res.status(200).json({ status: 'success', licenseMode: mode });
 });
 
-app.post('/api/register-device', (req, res) => {
-    mobilePushToken = req.body.token;
-    console.log(`[DISTURB] Mobile device registered for remote push commands. Token secured.`);
-    res.status(200).json({ status: 'success' });
+// ⚡ REALTIME DB SYNC: DEVICE REGISTRATION ⚡
+app.post('/api/register-device', async (req, res) => {
+    const { token } = req.body;
+    try {
+        if (!db) throw new Error("Database not initialized");
+        
+        const userRef = db.ref('users/Babatunde');
+        
+        // 1. Use await snap.get() before updates for Realtime DB sync.
+        const snap = await userRef.get();
+        let currentData = snap.exists() ? snap.val() : {};
+
+        await userRef.set({
+            userId: 'Babatunde',
+            pushToken: token,
+            cronHour: currentData.cronHour !== undefined ? currentData.cronHour : 8,
+            cronMinute: currentData.cronMinute !== undefined ? currentData.cronMinute : 0,
+            targetMinutes: currentData.targetMinutes || 30,
+            deadlineHour: currentData.deadlineHour || 17,
+            lastScanDate: currentData.lastScanDate || ''
+        });
+
+        console.log(`[DISTURB] Mobile device registered & Realtime Sync complete for Babatunde.`);
+        res.status(200).json({ status: 'success' });
+    } catch (error) {
+        console.error('[DISTURB] Sync Error:', error.message);
+        res.status(500).json({ status: 'error' });
+    }
 });
 
-// ⚡ THE 8:00 AM AUTONOMOUS SCANNER (UPGRADED FOR PACIFIC TIME) ⚡
-cron.schedule('0 8 * * *', async () => {
-    console.log('[DISTURB] ⏰ Executing 8:00 AM Autonomous Scan...');
+// ⚡ THE DYNAMIC CRON ENGINE (RUNS EVERY MINUTE) ⚡
+cron.schedule('* * * * *', async () => {
     try {
-        const cronMinutes = parseInt(process.env.CRON_TARGET_MINUTES) || 30;
-        const cronDeadline = parseInt(process.env.CRON_DEADLINE_HOUR) || 17;
+        if (!db) return;
 
-        const spotData = await findSleepSpot(cronMinutes, 'strict', cronDeadline); 
+        const now = new Date();
+        const ptTime = new Date(now.toLocaleString("en-US", {timeZone: "America/Los_Angeles"}));
+        const currentHour = ptTime.getHours();
+        const currentMinute = ptTime.getMinutes();
+        const currentDateStr = ptTime.toISOString().split('T')[0];
+
+        const usersRef = db.ref('users');
+        const snap = await usersRef.get();
         
-        if (spotData && mobilePushToken) {
-            let notificationTitle = '⚡ DISTURB: TARGET ACQUIRED';
-            let notificationBody = '';
+        if (!snap.exists()) return;
 
-            if (spotData.status === 'IDEAL') {
-                const startStr = spotData.start.toLocaleTimeString('en-US', timeZoneConfig);
-                const endStr = spotData.end.toLocaleTimeString('en-US', timeZoneConfig);
-                notificationBody = `Optimal ${spotData.minutes}m recovery block secured: ${startStr} - ${endStr}. Tap to arm system.`;
-            } 
-            else if (spotData.status === 'NEGOTIATED') {
-                const startStr = spotData.start.toLocaleTimeString('en-US', timeZoneConfig);
-                const endStr = spotData.end.toLocaleTimeString('en-US', timeZoneConfig);
-                notificationBody = `${spotData.originalTarget}m target unavailable. Secured ${spotData.minutes}m compromise: ${startStr} - ${endStr}. Accept deal?`;
-            }
-            else if (spotData.status === 'SPLIT') {
-                const s1 = spotData.spots[0].start.toLocaleTimeString('en-US', timeZoneConfig);
-                const s2 = spotData.spots[1].start.toLocaleTimeString('en-US', timeZoneConfig);
-                notificationBody = `Continuous block impossible. Secured two ${spotData.spots[0].minutes}m micro-recoveries at ${s1} & ${s2}. Arm matrix?`;
-            }
-            else if (spotData.status === 'BREACH') {
-                notificationTitle = '⚠️ DISTURB: BURNOUT BREACH';
-                notificationBody = `Optimal recovery window unavailable due to severe schedule density. Burnout Breach logged. Conserve your energy today—your calendar is at maximum capacity.`;
-                breachCount++; 
-                console.log(`[DISTURB] 🔴 BURNOUT BREACH LOGGED. Total Breaches: ${breachCount}`);
-            }
+        // 2. Force current_order to Array via Object.values() to prevent Object-crash.
+        const usersArray = Object.values(snap.val());
 
-            await axios.post('https://exp.host/--/api/v2/push/send', {
-                to: mobilePushToken,
-                title: notificationTitle,
-                body: notificationBody,
-                sound: 'default',
-                priority: 'high'
-            });
-            console.log(`[DISTURB] Morning push deployed via matrix logic. Status: ${spotData.status}`);
+        for (const userData of usersArray) {
+            if (userData.cronHour === currentHour && userData.cronMinute === currentMinute) {
+                // Prevent duplicate firing on the same day
+                if (userData.lastScanDate === currentDateStr) continue;
+
+                console.log(`[DISTURB] ⏰ Executing Dynamic Autonomous Scan for ${userData.userId}...`);
+                const spotData = await findSleepSpot(userData.targetMinutes, 'strict', userData.deadlineHour); 
+                
+                if (spotData && userData.pushToken) {
+                    let notificationTitle = '⚡ DISTURB: TARGET ACQUIRED';
+                    let notificationBody = '';
+
+                    if (spotData.status === 'IDEAL') {
+                        const startStr = spotData.start.toLocaleTimeString('en-US', timeZoneConfig);
+                        const endStr = spotData.end.toLocaleTimeString('en-US', timeZoneConfig);
+                        notificationBody = `Optimal ${spotData.minutes}m recovery block secured: ${startStr} - ${endStr}. Tap to arm system.`;
+                    } 
+                    else if (spotData.status === 'NEGOTIATED') {
+                        const startStr = spotData.start.toLocaleTimeString('en-US', timeZoneConfig);
+                        const endStr = spotData.end.toLocaleTimeString('en-US', timeZoneConfig);
+                        notificationBody = `${spotData.originalTarget}m target unavailable. Secured ${spotData.minutes}m compromise: ${startStr} - ${endStr}. Accept deal?`;
+                    }
+                    else if (spotData.status === 'SPLIT') {
+                        const s1 = spotData.spots[0].start.toLocaleTimeString('en-US', timeZoneConfig);
+                        const s2 = spotData.spots[1].start.toLocaleTimeString('en-US', timeZoneConfig);
+                        notificationBody = `Continuous block impossible. Secured two ${spotData.spots[0].minutes}m micro-recoveries at ${s1} & ${s2}. Arm matrix?`;
+                    }
+                    else if (spotData.status === 'BREACH') {
+                        notificationTitle = '⚠️ DISTURB: BURNOUT BREACH';
+                        notificationBody = `Optimal recovery window unavailable due to severe schedule density. Burnout Breach logged. Conserve your energy today—your calendar is at maximum capacity.`;
+                        breachCount++; 
+                        console.log(`[DISTURB] 🔴 BURNOUT BREACH LOGGED. Total Breaches: ${breachCount}`);
+                    }
+
+                    await axios.post('https://exp.host/--/api/v2/push/send', {
+                        to: userData.pushToken,
+                        title: notificationTitle,
+                        body: notificationBody,
+                        sound: 'default',
+                        priority: 'high'
+                    });
+
+                    console.log(`[DISTURB] Push deployed. Status: ${spotData.status}`);
+                    await db.ref(`users/${userData.userId}`).update({ lastScanDate: currentDateStr });
+                }
+            }
         }
     } catch (error) {
-        console.error('[DISTURB] Cron Execution Failed:', error.message);
+        console.error('[DISTURB] Dynamic Cron Execution Failed:', error.message);
     }
-}, {
-    scheduled: true,
-    timezone: "America/Los_Angeles"
 });
 
-// ⚡ MANUAL SCANNER API (UPGRADED FOR THE MATRIX) ⚡
+// ⚡ MANUAL SCANNER API ⚡
 app.get('/api/scan-calendar', async (req, res) => {
     const mode = req.query.mode || 'strict';
     const targetMinutes = parseInt(req.query.minutes) || 30;
@@ -114,7 +168,7 @@ app.get('/api/scan-calendar', async (req, res) => {
         
         if (spotData.status === 'BREACH') {
             breachCount++;
-            console.log(`[DISTURB] 🔴 BURNOUT BREACH LOGGED. Total Breaches: ${breachCount}`);
+            console.log(`[DISTURB] 🔴 BURNOUT BREACH LOGGED.`);
             res.status(200).json({ status: 'success', found: false, message: 'BURNOUT BREACH: MAXIMUM CALENDAR CAPACITY.' });
         } else {
             console.log(`[DISTURB] Gap Matrix Status: ${spotData.status}`);
@@ -145,7 +199,6 @@ app.post('/api/arm-recovery', async (req, res) => {
         const warningTime = startTime - (5 * 60 * 1000);
         if (warningTime > now) {
             activeSession.warningTimer = setTimeout(() => {
-                console.log('[DISTURB] Firing 5-minute wrap-up warning to desktop.');
                 exec(`osascript -e 'display notification "Cognitive recovery block initiates in 5 minutes. Wrap up your current task." with title "DISTURB"'`);
             }, warningTime - now);
         }
@@ -153,28 +206,25 @@ app.post('/api/arm-recovery', async (req, res) => {
         const lockdownDelay = startTime - now;
         if (lockdownDelay > 0) {
             activeSession.lockTimer = setTimeout(async () => {
-                console.log('[DISTURB] Executing Scheduled Lockdown...');
                 try {
                     await axios.post('https://slack.com/api/dnd.setSnooze', new URLSearchParams({ token: process.env.SLACK_USER_TOKEN, num_minutes: minutes }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-                    // LOCALIZED PACIFIC TIME INJECTION
                     const returnTime = new Date(endTime).toLocaleTimeString('en-US', timeZoneConfig);
                     await axios.post('https://slack.com/api/users.profile.set', { profile: { status_text: `⚡ System Locked / Back at ${returnTime}`, status_emoji: ":disturb-blue:", status_expiration: 0 } }, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${process.env.SLACK_USER_TOKEN}` } });
-                    exec('shortcuts run "DisturbOn"', () => console.log('[DISTURB] Mac OS DND Engaged.'));
+                    exec('shortcuts run "DisturbOn"');
                     telemetryLog.push({ id: Date.now().toString(), user: "Babatunde", action: "LOCKED", durationRequested: minutes, timestamp: new Date().toISOString() });
-                } catch (error) { console.error('[DISTURB] Scheduled Lockdown Failed:', error.message); }
+                } catch (error) { console.error(error.message); }
             }, lockdownDelay);
         }
 
         const wakeDelay = endTime - now;
         if (wakeDelay > 0) {
             activeSession.wakeTimer = setTimeout(async () => {
-                console.log('[DISTURB] Executing Scheduled Wake Sequence...');
                 try {
                     await axios.post('https://slack.com/api/dnd.endDnd', new URLSearchParams({ token: process.env.SLACK_USER_TOKEN }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
                     await axios.post('https://slack.com/api/users.profile.set', { profile: { status_text: "", status_emoji: "" } }, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${process.env.SLACK_USER_TOKEN}` } });
-                    exec('shortcuts run "DisturbOff"', () => console.log('[DISTURB] Mac OS DND Cleared.'));
+                    exec('shortcuts run "DisturbOff"');
                     telemetryLog.push({ id: Date.now().toString(), user: "Babatunde", action: "AWAKE", timestamp: new Date().toISOString() });
-                } catch (error) { console.error('[DISTURB] Scheduled Wake Failed:', error.message); }
+                } catch (error) { console.error(error.message); }
             }, wakeDelay);
         }
 
@@ -186,8 +236,7 @@ app.post('/api/arm-recovery', async (req, res) => {
 
 app.post('/api/clear-recovery', async (req, res) => {
     try {
-        console.log('[DISTURB] ABORT PROTOCOL INITIATED. Killing active timers...');
-        
+        console.log('[DISTURB] ABORT PROTOCOL INITIATED.');
         clearTimeout(activeSession.warningTimer);
         clearTimeout(activeSession.lockTimer);
         clearTimeout(activeSession.wakeTimer);
@@ -201,14 +250,12 @@ app.post('/api/clear-recovery', async (req, res) => {
         await axios.post('https://slack.com/api/users.profile.set', { profile: { status_text: "", status_emoji: "" } }, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${process.env.SLACK_USER_TOKEN}` } });
         exec('shortcuts run "DisturbOff"');
         
-        console.log('[DISTURB] System successfully disarmed.');
-        res.status(200).json({ status: 'success', message: 'System aborted and restored.' });
+        res.status(200).json({ status: 'success', message: 'System aborted.' });
     } catch (error) {
         res.status(500).json({ status: 'fatal', error: error.message });
     }
 });
 
-// ⚡ DASHBOARD API: NOW EXPOSING THE BREACH LEDGER ⚡
 app.get('/api/dashboard', (req, res) => {
     const totalSessions = telemetryLog.filter(log => log.action === 'LOCKED').length;
     const totalMinutesProtected = telemetryLog.filter(log => log.action === 'LOCKED').reduce((sum, log) => sum + log.durationRequested, 0);
@@ -218,7 +265,7 @@ app.get('/api/dashboard', (req, res) => {
             activeUsers: 1, 
             totalLockdownsExecuted: totalSessions, 
             totalMinutesProtected: totalMinutesProtected,
-            burnoutBreachesLogged: breachCount // 🔴 Exposed to HR
+            burnoutBreachesLogged: breachCount 
         }, 
         rawLogs: telemetryLog 
     });
