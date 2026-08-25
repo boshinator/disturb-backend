@@ -50,11 +50,10 @@ app.post('/api/register-device', (req, res) => {
     res.status(200).json({ status: 'success' });
 });
 
-// ⚡ THE 8:00 AM AUTONOMOUS SCANNER (UPGRADED FOR THE MATRIX) ⚡
+// ⚡ THE 8:00 AM AUTONOMOUS SCANNER (UPGRADED FOR PACIFIC TIME) ⚡
 cron.schedule('0 8 * * *', async () => {
     console.log('[DISTURB] ⏰ Executing 8:00 AM Autonomous Scan...');
     try {
-        // DYNAMIC CLOUD PARAMETER
         const cronMinutes = parseInt(process.env.CRON_TARGET_MINUTES) || 30;
         const cronDeadline = parseInt(process.env.CRON_DEADLINE_HOUR) || 17;
 
@@ -93,12 +92,14 @@ cron.schedule('0 8 * * *', async () => {
                 sound: 'default',
                 priority: 'high'
             });
-
             console.log(`[DISTURB] Morning push deployed via matrix logic. Status: ${spotData.status}`);
         }
     } catch (error) {
         console.error('[DISTURB] Cron Execution Failed:', error.message);
     }
+}, {
+    scheduled: true,
+    timezone: "America/Los_Angeles"
 });
 
 // ⚡ MANUAL SCANNER API (UPGRADED FOR THE MATRIX) ⚡
