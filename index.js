@@ -8,7 +8,8 @@ import { exec } from 'child_process';
 import path from 'path'; 
 import { fileURLToPath } from 'url'; 
 import cron from 'node-cron'; 
-import admin from 'firebase-admin';
+import { initializeApp, cert } from 'firebase-admin/app';
+import { getDatabase } from 'firebase-admin/database';
 import fs from 'fs';
 import { findSleepSpot, blockCalendarSpot, removeCalendarSpot } from './calendar.js';
 
@@ -18,15 +19,18 @@ const __dirname = path.dirname(__filename);
 // ⚡ REALTIME DATABASE INITIATION ⚡
 let db;
 try {
-    const serviceAccount = JSON.parse(fs.readFileSync(path.join(__dirname, 'firebase-credentials.json'), 'utf8'));
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
+    // Dynamically check if we are in the Render cloud vault, otherwise use local path
+    const keyPath = process.env.RENDER ? '/etc/secrets/firebase-credentials.json' : path.join(__dirname, 'firebase-credentials.json');
+    const serviceAccount = JSON.parse(fs.readFileSync(keyPath, 'utf8'));
+    
+    initializeApp({
+        credential: cert(serviceAccount),
         databaseURL: process.env.FIREBASE_DB_URL
     });
-    db = admin.database();
+    db = getDatabase();
     console.log('[DISTURB] Realtime Database Matrix: ONLINE');
 } catch (error) {
-    console.error('[DISTURB] FATAL DB ERROR: Missing Credentials or URL.', error.message);
+    console.error('[DISTURB] FATAL DB ERROR:', error.message);
 }
 
 const app = express();
