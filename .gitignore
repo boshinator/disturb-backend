@@ -8,3 +8,4 @@ public/token.json
 public/credentials.json
 *.log
 .DS_Store
+firebase-credentials.json
