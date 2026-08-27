@@ -160,6 +160,20 @@ cron.schedule('* * * * *', async () => {
     }
 });
 
+// ⚡ REALTIME DB SYNC: DYNAMIC CRON UPDATE ⚡
+app.post('/api/update-cron', async (req, res) => {
+    const { userId, cronHour, cronMinute } = req.body;
+    try {
+        if (!db) throw new Error("Database not initialized");
+        await db.ref(`users/${userId}`).update({ cronHour, cronMinute });
+        console.log(`[DISTURB] Cron Matrix updated for ${userId}: ${cronHour}:${cronMinute}`);
+        res.status(200).json({ status: 'success' });
+    } catch (error) {
+        console.error('[DISTURB] Cron Update Error:', error.message);
+        res.status(500).json({ status: 'error' });
+    }
+});
+
 // ⚡ MANUAL SCANNER API ⚡
 app.get('/api/scan-calendar', async (req, res) => {
     const mode = req.query.mode || 'strict';
