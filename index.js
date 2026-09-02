@@ -213,7 +213,7 @@ app.post('/api/instant-arm', async (req, res) => {
         await axios.post('https://slack.com/api/dnd.setSnooze', new URLSearchParams({ token: process.env.SLACK_USER_TOKEN, num_minutes: minutes }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
         const returnTime = endTime.toLocaleTimeString('en-US', timeZoneConfig);
         await axios.post('https://slack.com/api/users.profile.set', { profile: { status_text: `⚡ System Locked / Back at ${returnTime}`, status_emoji: ":disturb-blue:", status_expiration: 0 } }, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${process.env.SLACK_USER_TOKEN}` } });
-        exec('shortcuts run "DisturbOn"');
+        if (db) db.ref('users/Babatunde/macCommand').set('LOCK');
         
         telemetryLog.push({ id: Date.now().toString(), user: "Babatunde", action: "LOCKED_INSTANT", durationRequested: minutes, timestamp: now.toISOString() });
         
@@ -222,7 +222,7 @@ app.post('/api/instant-arm', async (req, res) => {
             try {
                 await axios.post('https://slack.com/api/dnd.endDnd', new URLSearchParams({ token: process.env.SLACK_USER_TOKEN }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
                 await axios.post('https://slack.com/api/users.profile.set', { profile: { status_text: "", status_emoji: "" } }, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${process.env.SLACK_USER_TOKEN}` } });
-                exec('shortcuts run "DisturbOff"');
+                if (db) db.ref('users/Babatunde/macCommand').set('UNLOCK');
             } catch (error) { console.error(error.message); }
         }, minutes * 60 * 1000);
 
@@ -264,7 +264,7 @@ app.post('/api/arm-recovery', async (req, res) => {
                     await axios.post('https://slack.com/api/dnd.setSnooze', new URLSearchParams({ token: process.env.SLACK_USER_TOKEN, num_minutes: minutes }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
                     const returnTime = new Date(endTime).toLocaleTimeString('en-US', timeZoneConfig);
                     await axios.post('https://slack.com/api/users.profile.set', { profile: { status_text: `⚡ System Locked / Back at ${returnTime}`, status_emoji: ":disturb-blue:", status_expiration: 0 } }, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${process.env.SLACK_USER_TOKEN}` } });
-                    exec('shortcuts run "DisturbOn"');
+                    if (db) db.ref('users/Babatunde/macCommand').set('LOCK');
                     telemetryLog.push({ id: Date.now().toString(), user: "Babatunde", action: "LOCKED", durationRequested: minutes, timestamp: new Date().toISOString() });
                 } catch (error) { console.error(error.message); }
             }, lockdownDelay);
@@ -276,7 +276,7 @@ app.post('/api/arm-recovery', async (req, res) => {
                 try {
                     await axios.post('https://slack.com/api/dnd.endDnd', new URLSearchParams({ token: process.env.SLACK_USER_TOKEN }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
                     await axios.post('https://slack.com/api/users.profile.set', { profile: { status_text: "", status_emoji: "" } }, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${process.env.SLACK_USER_TOKEN}` } });
-                    exec('shortcuts run "DisturbOff"');
+                    if (db) db.ref('users/Babatunde/macCommand').set('UNLOCK');
                     telemetryLog.push({ id: Date.now().toString(), user: "Babatunde", action: "AWAKE", timestamp: new Date().toISOString() });
                 } catch (error) { console.error(error.message); }
             }, wakeDelay);
@@ -302,7 +302,7 @@ app.post('/api/clear-recovery', async (req, res) => {
 
         await axios.post('https://slack.com/api/dnd.endDnd', new URLSearchParams({ token: process.env.SLACK_USER_TOKEN }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
         await axios.post('https://slack.com/api/users.profile.set', { profile: { status_text: "", status_emoji: "" } }, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${process.env.SLACK_USER_TOKEN}` } });
-        exec('shortcuts run "DisturbOff"');
+        if (db) db.ref('users/Babatunde/macCommand').set('UNLOCK');
         
         res.status(200).json({ status: 'success', message: 'System aborted.' });
     } catch (error) {
