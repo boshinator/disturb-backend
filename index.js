@@ -19,7 +19,6 @@ const __dirname = path.dirname(__filename);
 // ⚡ REALTIME DATABASE INITIATION ⚡
 let db;
 try {
-    // Dynamically check if we are in the Render cloud vault, otherwise use local path
     const keyPath = process.env.RENDER ? '/etc/secrets/firebase-credentials.json' : path.join(__dirname, 'firebase-credentials.json');
     const serviceAccount = JSON.parse(fs.readFileSync(keyPath, 'utf8'));
     
@@ -114,7 +113,10 @@ cron.schedule('* * * * *', async () => {
                 if (userData.lastScanDate === currentDateStr) continue;
 
                 console.log(`[DISTURB] ⏰ Executing Dynamic Autonomous Scan for ${userData.userId}...`);
-                const spotData = await findSleepSpot(userData.targetMinutes, 'strict', userData.deadlineHour); 
+                
+                // ⚡ 10-MINUTE FLOOR CLAMP FOR AUTONOMOUS SCAN ⚡
+                const safeMinutes = Math.max(10, parseInt(userData.targetMinutes) || 30);
+                const spotData = await findSleepSpot(safeMinutes, 'strict', userData.deadlineHour); 
                 
                 if (spotData && userData.pushToken) {
                     let notificationTitle = '⚡ DISTURB: TARGET ACQUIRED';
@@ -193,6 +195,40 @@ app.get('/api/scan-calendar', async (req, res) => {
             res.status(200).json({ status: 'success', found: true, data: spotData });
         }
     } catch (error) {
+        res.status(500).json({ status: 'error', error: error.message });
+    }
+});
+
+// ⚡ INSTANT STRICT ARM: Bypasses scan and locks UI immediately ⚡
+app.post('/api/instant-arm', async (req, res) => {
+    const minutes = parseInt(req.body.minutes) || 10;
+    try {
+        console.log(`[DISTURB] INSTANT OVERRIDE TRIGGERED. Defending for ${minutes} MIN...`);
+        const now = new Date();
+        const endTime = new Date(now.getTime() + (minutes * 60 * 1000));
+        
+        const eventData = await blockCalendarSpot(now.toISOString(), endTime.toISOString());
+        activeSession.eventId = eventData.id;
+
+        await axios.post('https://slack.com/api/dnd.setSnooze', new URLSearchParams({ token: process.env.SLACK_USER_TOKEN, num_minutes: minutes }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+        const returnTime = endTime.toLocaleTimeString('en-US', timeZoneConfig);
+        await axios.post('https://slack.com/api/users.profile.set', { profile: { status_text: `⚡ System Locked / Back at ${returnTime}`, status_emoji: ":disturb-blue:", status_expiration: 0 } }, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${process.env.SLACK_USER_TOKEN}` } });
+        exec('shortcuts run "DisturbOn"');
+        
+        telemetryLog.push({ id: Date.now().toString(), user: "Babatunde", action: "LOCKED_INSTANT", durationRequested: minutes, timestamp: now.toISOString() });
+        
+        clearTimeout(activeSession.wakeTimer);
+        activeSession.wakeTimer = setTimeout(async () => {
+            try {
+                await axios.post('https://slack.com/api/dnd.endDnd', new URLSearchParams({ token: process.env.SLACK_USER_TOKEN }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+                await axios.post('https://slack.com/api/users.profile.set', { profile: { status_text: "", status_emoji: "" } }, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Authorization': `Bearer ${process.env.SLACK_USER_TOKEN}` } });
+                exec('shortcuts run "DisturbOff"');
+            } catch (error) { console.error(error.message); }
+        }, minutes * 60 * 1000);
+
+        res.status(200).json({ status: 'success', message: 'Instant System Armed.' });
+    } catch (error) {
+        console.error('[DISTURB] Instant Arm Failed:', error.message);
         res.status(500).json({ status: 'error', error: error.message });
     }
 });
