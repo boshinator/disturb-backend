@@ -326,4 +326,21 @@ app.get('/api/dashboard', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+// ⚡ STRICT MODE: Fire-and-Forget Calendar Injection ⚡
+app.post('/strict-block', async (req, res) => {
+    try {
+        const { durationMinutes } = req.body;
+        if (!durationMinutes) return res.status(400).send({ error: 'Duration required' });
+
+        const { blockCalendarSpot } = await import('./calendar.js');
+        const now = new Date();
+        const end = new Date(now.getTime() + durationMinutes * 60000);
+
+        const event = await blockCalendarSpot(now.toISOString(), end.toISOString());
+        res.status(200).send({ message: 'STRICT GHOST INJECTED', eventId: event.id });
+    } catch (error) {
+        console.error('[DISTURB] Strict Block Error:', error.message);
+        res.status(500).send({ error: 'CLOUD MATRIX UNREACHABLE' });
+    }
+});
 app.listen(PORT, () => console.log(`[DISTURB] Command Center live on port ${PORT}`));
