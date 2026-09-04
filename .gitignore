@@ -9,3 +9,4 @@ public/credentials.json
 *.log
 .DS_Store
 firebase-credentials.json
+google-service-account.json

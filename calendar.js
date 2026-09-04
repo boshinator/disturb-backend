@@ -1,17 +1,23 @@
 // calendar.js
-import fs from 'fs/promises';
 import { google } from 'googleapis';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 async function getAuthClient() {
-    const credsContent = await fs.readFile('credentials.json', 'utf-8');
-    const tokenContent = await fs.readFile('token.json', 'utf-8');
-    const keys = JSON.parse(credsContent);
-    const tokens = JSON.parse(tokenContent);
-    const { client_secret, client_id } = keys.installed || keys.web;
+    // Render reads from the secret vault; your Mac reads from the local folder
+    const keyPath = process.env.RENDER 
+        ? '/etc/secrets/google-service-account.json' 
+        : path.join(__dirname, 'google-service-account.json');
+
+    const auth = new google.auth.GoogleAuth({
+        keyFile: keyPath,
+        scopes: ['https://www.googleapis.com/auth/calendar'],
+    });
     
-    const oAuth2Client = new google.auth.OAuth2(client_id, client_secret);
-    oAuth2Client.setCredentials(tokens);
-    return oAuth2Client;
+    return await auth.getClient();
 }
 
 // ⚡ HELPER: Scans the entire day and returns ALL available gaps ⚡
